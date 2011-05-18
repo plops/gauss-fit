@@ -121,7 +121,9 @@
 		(/ sum total))))
     (values mu-x mu-y sxx sxy syy)))
 
-(defun create (w &key (h w) (x 0e0) (y 0e0) (sxx .1s0) (sxy 0s0) (syy sxx))
+
+
+(defun create (w h x y sxx sxy syy)
   (declare (type fixnum w h) 
 	   (type num x y sxx sxy syy))
   (let ((ar (make-array (list h w) :element-type 'num)))
@@ -134,6 +136,11 @@
 		   x y sxx sxy syy)))))
     ar))
 
+(defun create-default (w &key (h w) (x 0e0) (y 0e0) (sxx .1s0) (sxy 0s0) (syy sxx))
+  (declare (type fixnum w h) 
+	   (type num x y sxx sxy syy))
+  (create w h x y sxx sxy syy))
+
 (defun scale (q)
   (declare (type (simple-array num 2) q))
   (let* ((r (make-array (array-dimensions q)
@@ -143,6 +150,21 @@
     (dotimes (i (length q1))
       (setf (aref r1 i) (floor (* 9.5 (aref q1 i)))))
     r))
+
+(defun do-fit (img)
+  (declare (type (simple-array num 2) img))
+  (destructuring-bind (h w) (array-dimensions img)
+    (multiple-value-bind (px py) (calc-position w :h h)
+      (estimate-gauss img px py))))
+
+(defun run ()
+  (let* ((test (create-default 13 :sxx .04 :sxy .03))
+	 (fit (multiple-value-call #'create 13 13 (do-fit test))))
+    (format t "~a~%" (list :parameters (multiple-value-list (do-fit test))
+			   :relative-error (rel-error test fit)))
+    fit))
+#+nil
+(scale (run))
 
 #+nil
 (scale
