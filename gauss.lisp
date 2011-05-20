@@ -222,10 +222,11 @@
 ;; http://en.wikipedia.org/wiki/Poisson_distribution#Generating_Poisson-distributed_random_variables
 (defun poisson-random-number (lambda)
   "Knuth's algorithm, only useful for small lambda"
-  (declare (type num lambda))
+  (declare (type num lambda)
+	   (values fixnum &optional))
   (let ((l (exp (- lambda)))
 	(k 0)
-	(p 0s0))
+	(p 1s0))
     (declare (type num l p)
 	     (type fixnum k))
     (loop while (< l p) do
@@ -233,7 +234,45 @@
 	 (setf p (* p (random 1s0))))
     (1- k)))
 #+nil
-(poisson-random-number 12)
+(defparameter *bag* (let* ((n 1000000)
+			   (b (make-array n :element-type 'fixnum)))
+		      (dotimes (i n) 
+			(setf (aref b i) (poisson-random-number 9s0)))
+		      b))
+
+(defun histogram (a &key (n nil))
+  (let* ((mi (reduce #'min a))
+	 (ma (reduce #'max a))
+	 (a-fix (make-array (length a) :element-type 'fixnum))
+	 (nn (if n
+		 n
+		 (- ma mi)))
+	 (hist (make-array nn :element-type '(integer 0))))
+    (dotimes (i (length a))
+      (setf (aref a-fix i)
+	    (floor (* (1- nn) (- (elt a i) mi))
+		   (- ma mi))))
+    (dotimes (i (length a))
+      (incf (aref hist (aref a-fix i))))
+    (values hist mi ma)))
+#+nil
+(time 
+ (histogram *bag*))
+
+
+
+(defun print-histogram (hist mi ma)
+  (let ((n (length hist)))
+   (dotimes (i n)
+     (format t "~a ~a~%" (+ mi (* 1s0 (- ma mi) (/ i n))) (aref hist i)))))
+#+nil
+(with-open-file (*standard-output* "/dev/shm/o.dat" :if-does-not-exist :create
+				   :if-exists :supersede :direction :output)
+ (multiple-value-call #'print-histogram
+   (histogram *bag*)))
+
+
+(print-histogram #(1 2 3) 1 3)
 (defun psi (a x)
   (declare (type num x a))
   (if (< (abs x) a)
