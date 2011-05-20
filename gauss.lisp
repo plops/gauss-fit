@@ -50,30 +50,33 @@
 (defun gauss (px py x y sxx sxy syy)
   (declare (type num px py x y sxx sxy syy))
   (multiple-value-bind (mx my) (.- px py x y)
-    (exp (* -.5 (multiple-value-call #'dot mx my 
-		     (multiple-value-call #'mul 
-		       (inv sxx sxy sxy syy) mx my))))))
+    (let ((arg (multiple-value-call #'dot mx my 
+				    (multiple-value-call #'mul 
+				      (inv sxx sxy sxy syy) mx my))))
+      (if (< arg 0s0)
+	  1s0
+	  (exp (* -.5 arg))))))
 #+nil
 (gauss .1 .2 .3 .3 .2 .2 .4)
 
 
 (defun rel-error (z zmodel)
   (declare (type (simple-array num 2) z zmodel)
-	   (values num &optional))
+	   (values double-float &optional))
   (let* ((z1 (sb-ext:array-storage-vector z))
 	 (zmodel1 (sb-ext:array-storage-vector zmodel))
 	 (n (length z1))
-	 (z0 (let ((sum 0s0))
+	 (z0 (let ((sum 0d0))
 	       (dotimes (i n)
 		 (incf sum (aref z1 i)))
 	       (/ sum n)))
-	 (top (let ((sum 0s0))
+	 (top (let ((sum 0d0))
 		(dotimes (i n)
 		  (incf sum (expt (- (aref z1 i) 
 				     (aref zmodel1 i))
 				  2)))
 		sum))
-	 (bottom (let ((sum 0s0))
+	 (bottom (let ((sum 0d0))
 		   (dotimes (i n)
 		     (incf sum (expt (- (aref z1 i)
 					z0)
@@ -220,7 +223,7 @@
   (let ((x 0s0)
 	(y 0s0)
 	(w 2s0)) 
-    (loop until (< w 1s0) do
+    (loop until (< w .9999s0) do
 	 (setf x (1- (random 2s0))
 	       y (1- (random 2s0))
 	       w (+ (* x x) (* y y))))
@@ -314,13 +317,105 @@
 (write-pgm "/dev/shm/o.pgm"
 	   (scale
 	    (noise
-	     (create-default 130 :x 72s0 :y 32s0 :sxx 40s0 :sxy 10s0))
+	     (create-default 80 :x 42s0 :y 32s0 :sxx 40s0 :sxy 10s0))
 	    :s 180))
+
+#+nil
+(defun copy-array (array)
+  (let ((dims (array-dimensions array)))
+    (adjust-array
+     (make-array dims :element-type (array-element-type array) :displaced-to array)
+     dims)))
+
+(defun copy-array (a)
+  (let* ((dims (array-dimensions a))
+	(b (make-array dims :element-type 'num))
+	(a1 (sb-ext:array-storage-vector a))
+	(b1 (sb-ext:array-storage-vector b)))
+    (dotimes (i (length a1))
+      (setf (aref b1 i) (aref a1 i)))
+    b))
+
+
+(let* ((n 80)
+       (z (create-default n :x 42s0 :y 32s0 :sxx 40s0 :sxy 10s0))
+       (noised (noise (copy-array z)))
+       (fit (multiple-value-call #'create n n (do-fit z)))
+       (fitn (multiple-value-call #'create n n (do-fit noised))))
+  (write-pgm "/dev/shm/00data.pgm" (scale z :s 200))
+  (write-pgm "/dev/shm/10data-noise.pgm" (scale noised :s 200))
+  (write-pgm "/dev/shm/01fit-nonoise.pgm"
+	     (scale fit :s 200))
+  (write-pgm "/dev/shm/11fit-noise.pgm"
+	     (scale fitn :s 200))
+  (list (rel-error z fit) (multiple-value-list (do-fit z))
+	(rel-error z fitn) (multiple-value-list (do-fit noised))))
+
+;; medsel.pdf approximate median selection
+(defun triplet-adjust (a i step)
+  (let ((j (+ i step))
+	(k (+ i (* 2 step))))
+   (if (< (aref a i) (aref a j))
+       (if (< (aref a k) (aref a i))
+	   (rotatef (aref a i) (aref a j))
+	   (when (< (aref a k) (aref a j))
+	     (rotatef (aref a j) (aref a k))))
+       (if (< (aref a i) (aref a k))
+	   (rotatef (aref a i) (aref a j))
+	   (when (< (aref a j) (aref a k))
+	     (rotatef (aref a j) (aref a k)))))))
+
+(defun selection-sort (a left size step)
+  (loop for i from left below (+ left (* step (- size 1))) by step do
+       (let ((min i))
+	 (loop for j from (+ i step) below (+ left (* step size)) by step do
+	      (when (< (aref a j) (aref a min))
+		(setf min j)))
+	 (rotatef (aref a i) (aref a min)))))
+
+(defun approximate-median (a &key (threshold 8))
+  "THRESHOLD is the maximum size of the array, that is sorted. Bigger
+values result in better estimate of the median at the expense of
+processing time."
+  (let ((left-to-right nil)
+	(left 0)
+	(step 1)
+	(size (length a)))
+    (loop while (< threshold size) do
+	 (setf left-to-right (not left-to-right))
+	 (let* ((rem (mod size 3))
+	       (i (if left-to-right
+		      left
+		      (+ left (* (+ 3 rem) step)))))
+	   (dotimes (j (1- (floor size 3)))
+	     (triplet-adjust a i step)
+	     (incf i (* 3 step)))
+	   (if left-to-right
+	       (incf left step)
+	       (setf i left
+		     left (+ left (* (1+ rem) step))))
+	   (selection-sort a i (+ 3 rem) step)
+	   (when (= rem 2)
+	     (if left-to-right
+		 (rotatef (aref a (+ i step)) (aref a (+ i (* 2 step))))
+		 (rotatef (aref a (+ i (* 2 step))) (aref a (+ i (* 3 step))))))
+	   (setf step (* 3 step)
+		 size (floor size 3))))
+    (selection-sort a left size step)
+    (aref a (+ left (* step (floor (1- size) 2))))))
+
+#+nil
+(let* ((a (create-default 400 :position :unit))
+       (b (create-default 400 :position :unit))
+       (a1 (sb-ext:array-storage-vector a))
+       (b1 (sb-ext:array-storage-vector b)))
+  (list (time (approximate-median a1 :threshold 2000))
+	(time (elt (sort b1 #'<) (floor (length b1) 2)))))
 
 (defun noise (a &key (type :gaussian))
   (let ((a1 (sb-ext:array-storage-vector a)))
     (dotimes (i (length a1))
-      (setf (aref a1 i) (+ (aref a1 i) (normal-random-number .1s0 .03s0))))
+      (setf (aref a1 i) (+ (aref a1 i) (normal-random-number 0s0 .01s0))))
     a))
 
 (defun psi (a x)
