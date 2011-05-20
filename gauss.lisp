@@ -309,12 +309,20 @@
                       :displaced-to img)))
         (write-sequence data-1d s)))
     nil))
+
+#+nil
 (write-pgm "/dev/shm/o.pgm"
 	   (scale
-	    (create-default 130 :sxx .04 :sxy .03)
-	    :s 255))
+	    (noise
+	     (create-default 130 :x 72s0 :y 32s0 :sxx 40s0 :sxy 10s0))
+	    :s 180))
 
-(print-histogram #(1 2 3) 1 3)
+(defun noise (a &key (type :gaussian))
+  (let ((a1 (sb-ext:array-storage-vector a)))
+    (dotimes (i (length a1))
+      (setf (aref a1 i) (+ (aref a1 i) (normal-random-number .1s0 .03s0))))
+    a))
+
 (defun psi (a x)
   (declare (type num x a))
   (if (< (abs x) a)
