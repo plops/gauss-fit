@@ -336,7 +336,7 @@
       (setf (aref b1 i) (aref a1 i)))
     b))
 
-
+#+nil
 (let* ((n 80)
        (z (create-default n :x 42s0 :y 32s0 :sxx 40s0 :sxy 10s0))
        (noised (noise (copy-array z)))
@@ -465,18 +465,24 @@ processing time."
 	  (residual-abs (let ((q (make-array dims :element-type 'num)))
 			  (dotimes (j h)
 			    (dotimes (i w)
-			      (setf (aref q j i) (abs residual))))
+			      (setf (aref q j i) (abs (aref residual j i)))))
 			  q))
-	  (ellipse (let ((c (expt 1.6449 2))
-			 (q (make-array dims :element-type '(unsigned-byte 8))))
-		     (dotimes (j h)
-		       (dotimes (i w)
-			 (let* ((v (.- (aref px j i) (aref py j i)
-				       old-mu-x old-mu-y))
-				(r (dot v (mul old-sxx old-sxy old-sxy old-syy
-					       v))))
-			  (when (< r c)
-			    (setf (aref q j i) 255)))))))
+	  (ellipse (draw-covariance-ellipse w h px py old-mu-x old-mu-y
+					    old-sxx old-sxy old-syy))
+	  (inside-points (reduce #'+ (sb-ext:array-storage-vector ellipse)))
+	  (inside-region (let ((q (make-array inside-points :element-type 'num)))
+			   (dotimes (i (length q))
+			     (let ((x (mod i w))
+				   (y (floor i w)))
+			       (setf (aref q i) (aref residual-abs y x))))
+			   q))
+	  (sigma (/ (median inside-region) .6745))
+	  (weight (let ((q (make-array dims :element-type 'num))
+			(q1 (sb-ext:array-storage-vector q))
+			(r1 (sb-ext:array-storage-vector residual)))
+		    (dotimes (i (length q1))
+		      (setf (aref q1 i) (w1 (/ (aref residual1 i) sigma))))
+		    q))
 	  (total (let ((sum 0s0))
 		   (dotimes (i n)
 		     (incf sum (aref z1 i)))
@@ -502,6 +508,35 @@ processing time."
 		   (incf sum (* (aref z1 i) (* (- (aref px1 i) mu-x) 
 					       (- (aref py1 i) mu-y)))))
 		 (/ sum total))))
-     (write-pgm "/dev/shm/ellipse.pgm"
-		ellipse)
      (values mu-x mu-y sxx sxy syy))))
+
+
+(defun draw-covariance-ellipse (w h px py mu-x mu-y sxx sxy syy)
+  (let* ((c (expt 1.6449 2))
+		(q (make-array (list h w) :element-type '(unsigned-byte 8))))
+	   (dotimes (j h)
+	     (dotimes (i w)
+	       (multiple-value-bind (vx vy) (.- (aref px j i) (aref py j i)
+						mu-x mu-y)
+		 (let ((vvx (/ vx w))
+		       (vvy (/ vy h)))
+		   (let* ((r (multiple-value-call #'dot vvx vvy
+						  (mul sxx sxy sxy syy
+						       vvx vvy))))
+		     (when (< r c)
+		       (setf (aref q j i) 1)))))))
+	   q))
+
+
+#+nil
+(progn
+ (defparameter *ellipse*
+   (let ((h 120)
+	 (w 120))
+     (multiple-value-call #'draw-covariance-ellipse
+       w h
+       (calc-pixel-position w :h h) 
+       (do-fit
+	   (create-default w :h h :x 42s0 :y 32s0 
+			   :sxx 40s0 :sxy 10s0 :position :pixel)))))
+ (write-pgm "/dev/shm/ellipse.pgm" *ellipse*))
