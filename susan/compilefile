@@ -1,0 +1,2 @@
+#g++ clem2.cpp -o clem2 /home-old/martin/src/micromanager1.3/MMCore/libMMCore.a /home-old/martin/src/micromanager1.3/MMDevice/.libs/libMMDevice.a -lACE  -lcvd_debug -lGVars3_debug -llapack -lfftw3 -lm -g -ggdb -Wall -Wextra -DCVD_IMAGE_DEBUG -D_GLIBCXX_DEBUG  
+g++ findhomography_gaussblur_andor.cpp -o findhomography_gaussblur_andor /home-old/martin/src/micromanager1.3/MMCore/libMMCore.a /home-old/martin/src/micromanager1.3/MMDevice/.libs/libMMDevice.a -lACE  -lcvd -lGVars3 -llapack -lfftw3 -lm -g -ggdb -Wall -Wextra -O3  
