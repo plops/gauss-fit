@@ -1,6 +1,7 @@
 ;; 10.1.1.89.1895.pdf 2000Chen Robust Spot Fitting for Genetic Spot Array Images
 ;; fulltext.pdf Robust DNA microarray image analysis Norbert Braendle1, Horst Bischof2, Hilmar Lapp3
 (declaim (optimize (speed 1) (safety 1) (debug 1)))
+
 (defpackage :gauss
   (:use :cl))
 (in-package :gauss)
@@ -10,7 +11,8 @@
 
 (defun inv (a b c d)
   "Invert a 2x2 matrix."
-  (declare (type num a b c d))
+  (declare (type num a b c d)
+	   (values num num num num &optional))
   (let* ((det (- (* a d)
 		 (* b c)))
 	 (s (/ det)))
@@ -22,7 +24,8 @@
 
 (defun .- (a b x y)
   "Subtract two vectors."
-  (declare (type num a b x y))
+  (declare (type num a b x y)
+	   (values num num &optional))
   (values
    (- a x)
    (- b y)))
@@ -32,14 +35,16 @@
 
 (defun dot (a b x y)
   "Calculate dot product of vector AB and vector XY."
-  (declare (type num a b x y))
+  (declare (type num a b x y)
+	   (values num &optional))
   (+ (* a x) (* b y)))
 #+nil
 (multiple-value-call #'dot (.- 1e0 0e0 2e0 3e0) 3e0 4e0)
 
 (defun mul (a b c d x y)
   "Multiply ABCD matrix with vector XY."
-  (declare (type num a b c d x y))
+  (declare (type num a b c d x y)
+	   (values num num &optional))
   (values
    (+ (* a x) (* b y))
    (+ (* c x) (* d y))))
@@ -48,7 +53,8 @@
 
 
 (defun gauss (px py x y sxx sxy syy)
-  (declare (type num px py x y sxx sxy syy))
+  (declare (type num px py x y sxx sxy syy)
+	   (values num &optional))
   (multiple-value-bind (mx my) (.- px py x y)
     (let ((arg (multiple-value-call #'dot mx my 
 				    (multiple-value-call #'mul 
@@ -184,7 +190,7 @@
   (create w h x y sxx sxy syy :position position))
 
 (defun scale (q &key (s 9))
-  (declare (type (simple-array num 2) q))
+  #+ nil (declare (type (simple-array num 2) q))
   (let* ((r (make-array (array-dimensions q)
 			:element-type '(unsigned-byte 8)))
 	 (r1 (sb-ext:array-storage-vector r))
@@ -428,7 +434,7 @@ processing time."
 (defun noise (a &key (type :gaussian))
   (let ((a1 (sb-ext:array-storage-vector a)))
     (dotimes (i (length a1))
-      (setf (aref a1 i) (+ (aref a1 i) (normal-random-number 0s0 .01s0))))
+      (setf (aref a1 i) (+ (aref a1 i) (normal-random-number 0s0 .001s0))))
     a))
 
 (defun psi (a x)
@@ -439,16 +445,55 @@ processing time."
 
 (defun w1 (x)
   (declare (type num x))
-  (/ (psi 4s0 x)
-     x))
+  (if (= x 0s0)
+    0s0
+    (/ (psi 4s0 x)
+       x)))
 
 
+(defun draw-covariance-ellipse (w h px py mu-x mu-y sxx sxy syy)
+  (let* ((c (expt 1.6449 2))
+	 (q (make-array (list h w) :element-type '(unsigned-byte 8))))
+    (dotimes (j h)
+      (dotimes (i w)
+	(multiple-value-bind (vx vy) (.- (aref px j i) (aref py j i)
+					 mu-x mu-y)
+	  (let ((vvx (/ vx w))
+		(vvy (/ vy h)))
+	    (let* ((r (multiple-value-call #'dot vvx vvy
+						  (mul sxx sxy sxy syy
+						       vvx vvy))))
+	      (when (< r c)
+		(setf (aref q j i) 1)))))))
+    q))
+
+
+#+nil
+(progn
+ (defparameter *ellipse*
+   (let ((h 120)
+	 (w 120))
+     (multiple-value-call #'draw-covariance-ellipse
+       w h
+       (calc-pixel-position w :h h) 
+       (do-fit
+	   (create-default w :h h :x 42s0 :y 32s0 
+			   :sxx 40s0 :sxy 10s0 :position :pixel)))))
+ (write-pgm "/dev/shm/ellipse.pgm" *ellipse*))
+
+(defun .+ (a b)
+  (let* ((c (make-array (array-dimensions a) :element-type 'num))
+	 (a1 (sb-ext:array-storage-vector a))
+	 (b1 (sb-ext:array-storage-vector b))
+	 (c1 (sb-ext:array-storage-vector c)))
+    (dotimes (i (length c1))
+      (setf (aref c1 i) (+ (aref a1 i) (aref b1 i))))
+    c))
 
 (defun estimate-gauss-robust (z px py old-fit 
-			      old-a
 			      old-mu-x old-mu-y old-sxx old-sxy old-syy old-amp)
   (declare (type (simple-array num 2) z px py old-fit)
-	   (type num old-a old-mu-x old-mu-y old-sxx old-sxy old-syy))
+	   (type num old-mu-x old-mu-y old-sxx old-sxy old-syy old-amp))
   (destructuring-bind (h w) (array-dimensions z)
    (let* ((dims (array-dimensions z))
 	  (z1 (sb-ext:array-storage-vector z))
@@ -470,73 +515,154 @@ processing time."
 	  (ellipse (draw-covariance-ellipse w h px py old-mu-x old-mu-y
 					    old-sxx old-sxy old-syy))
 	  (inside-points (reduce #'+ (sb-ext:array-storage-vector ellipse)))
-	  (inside-region (let ((q (make-array inside-points :element-type 'num)))
-			   (dotimes (i (length q))
-			     (let ((x (mod i w))
-				   (y (floor i w)))
-			       (setf (aref q i) (aref residual-abs y x))))
+	  (inside-region (let ((q (make-array inside-points :element-type 'num))
+			       (k 0))
+			   (dotimes (j h)
+			    (dotimes (i w)
+			      (when (= 1 (aref ellipse j i)) 
+				(setf (aref q k) (aref residual-abs j i))
+				(incf k))))
 			   q))
 	  (sigma (/ (median inside-region) .6745))
-	  (weight (let ((q (make-array dims :element-type 'num))
-			(q1 (sb-ext:array-storage-vector q))
-			(r1 (sb-ext:array-storage-vector residual)))
+	  (weight (let* ((q (make-array dims :element-type 'num))
+			 (q1 (sb-ext:array-storage-vector q))
+			 (r1 (sb-ext:array-storage-vector residual)))
+		    (write-pgm "/dev/shm/21ellipse.pgm" (scale ellipse :s 255))
+		    (when (<= sigma 0s0)
+		      (error "sigma not positive ~A" sigma))
 		    (dotimes (i (length q1))
-		      (setf (aref q1 i) (w1 (/ (aref residual1 i) sigma))))
+		      (setf (aref q1 i) (w1 (/ (aref r1 i) sigma))))
 		    q))
+	  (weight1 (sb-ext:array-storage-vector weight))
 	  (total (let ((sum 0s0))
 		   (dotimes (i n)
 		     (incf sum (aref z1 i)))
 		   sum))
+	  (total-weight (let ((sum 0s0))
+			  (dotimes (i n)
+			    (incf sum (* (aref weight1 i) 
+					 (aref z1 i))))
+			  sum))
 	  (mu-x (let ((sum 0s0))
+		 (when (= 0s0 total-weight)
+		   (error "total-weight is zero"))
 		 (dotimes (i n)
-		   (incf sum (* (aref z1 i) (aref px1 i))))
-		 (/ sum total)))
+		   (incf sum (* (aref z1 i) (aref px1 i) (aref weight1 i))))
+		 (/ sum total-weight)))
 	  (mu-y (let ((sum 0s0))
 		 (dotimes (i n)
-		   (incf sum (* (aref z1 i) (aref py1 i))))
-		 (/ sum total)))
+		   (incf sum (* (aref z1 i) (aref py1 i) (aref weight1 i))))
+		 (/ sum total-weight)))
 	  (sxx (let ((sum 0s0))
 		 (dotimes (i n)
-		   (incf sum (* (aref z1 i) (expt (- (aref px1 i) mu-x) 2))))
+		   (incf sum (* (aref z1 i) (expt (* (aref weight1 i) 
+						     (- (aref px1 i) mu-x)) 2))))
 		 (/ sum total)))
 	  (syy (let ((sum 0s0))
 		 (dotimes (i n)
-		   (incf sum (* (aref z1 i) (expt (- (aref py1 i) mu-y) 2))))
+		   (incf sum (* (aref z1 i) (expt (* (aref weight1 i) 
+						     (- (aref py1 i) mu-y)) 2))))
 		 (/ sum total)))
 	  (sxy (let ((sum 0s0))
 		 (dotimes (i n)
 		   (incf sum (* (aref z1 i) (* (- (aref px1 i) mu-x) 
-					       (- (aref py1 i) mu-y)))))
-		 (/ sum total))))
-     (values mu-x mu-y sxx sxy syy))))
+					       (- (aref py1 i) mu-y)
+					       (expt (aref weight1 i) 2)))))
+		 (/ sum total)))
+	  (a (let ((sum 0s0)
+		   (bottom 0s0))
+	       (dotimes (i n)
+		 (let* ((m (aref old-fit1 i))
+			(v (* m (aref weight1 i))))
+		   (incf bottom (* v m))
+		   (incf sum (* (aref z1 i) v))))
+	       (/ sum bottom))))
 
+     (format t "~A~%" (list :sig sigma :wei (reduce #'min weight1)(reduce #'max weight1)))
+     (write-pgm "/dev/shm/22weight.pgm" (scale weight :s 200))
+     (values mu-x mu-y sxx sxy syy a))))
 
-(defun draw-covariance-ellipse (w h px py mu-x mu-y sxx sxy syy)
-  (let* ((c (expt 1.6449 2))
-		(q (make-array (list h w) :element-type '(unsigned-byte 8))))
-	   (dotimes (j h)
-	     (dotimes (i w)
-	       (multiple-value-bind (vx vy) (.- (aref px j i) (aref py j i)
-						mu-x mu-y)
-		 (let ((vvx (/ vx w))
-		       (vvy (/ vy h)))
-		   (let* ((r (multiple-value-call #'dot vvx vvy
-						  (mul sxx sxy sxy syy
-						       vvx vvy))))
-		     (when (< r c)
-		       (setf (aref q j i) 1)))))))
-	   q))
+(defun create-robust (w h x y sxx sxy syy a &key (position :pixel))
+  (declare (type fixnum w h) 
+	   (type num x y a sxx sxy syy)
+	   (values (simple-array num 2) &optional))
+  (let ((ar (make-array (list h w) :element-type 'num)))
+    (multiple-value-bind (px py)(ecase position
+				  (:pixel (calc-pixel-position w :h h))
+				  (:unit (calc-unit-position w :h h)))
+      (dotimes (j h)       
+	(dotimes (i w)
+	  (setf (aref ar j i)
+		(* a (gauss (aref px j i)
+			    (aref py j i)
+			    x y sxx sxy syy))))))
+    ar))
 
+(defun v+ (a b)
+  (declare (type (simple-array num 2) a b)
+	   (values (simple-array num 2) &optional))
+  (let ((c (make-array (array-dimensions a)
+		       :element-type 'num)))
+    (map-into (sb-ext:array-storage-vector c)
+	      #'(lambda (x y) (declare (type num x y)) 
+		  (+ x y)) 
+	      (sb-ext:array-storage-vector a)
+	      (sb-ext:array-storage-vector b))
+    c))
 
 #+nil
-(progn
- (defparameter *ellipse*
-   (let ((h 120)
-	 (w 120))
-     (multiple-value-call #'draw-covariance-ellipse
-       w h
-       (calc-pixel-position w :h h) 
-       (do-fit
-	   (create-default w :h h :x 42s0 :y 32s0 
-			   :sxx 40s0 :sxy 10s0 :position :pixel)))))
- (write-pgm "/dev/shm/ellipse.pgm" *ellipse*))
+(let* ((a (create-default 100 :x 50s0 :y 50s0 :sxx 10s0))
+       (b (create-default 100 :x 40s0 :y 50s0 :sxx 40s0))
+       (c (v+ a b)))
+  (write-pgm "/dev/shm/fasl.pgm"
+	     (scale c :s 230)))
+
+#+nil
+(let* ((n 200)
+       (z (create-default n :x 142s0 :y 132s0 :sxx 110s0 :sxy 10s0))
+       (a (create-default n :x 142s0 :y 102s0 :sxx 80s0 :sxy 10s0))
+       (za (v+ z a))
+       (x 142s0) (y 132s0) (sxx 110s0) (sxy 10s0) (syy 110s0) (a 1s0)
+       (fit ()))
+  (multiple-value-bind (px py) (calc-pixel-position n)
+    (dotimes (k 3)
+      (setf fit (create-robust n n x y sxx sxy syy a))
+      (format t "~a~%" (list k x y sxx sxy syy a))
+      (multiple-value-setq (x y sxx sxy syy a)
+       (multiple-value-call #'estimate-gauss-robust
+	 za
+	 px py
+	 fit
+	 x y sxx sxy syy a)))))
+
+#+nil
+(let* ((n 200)
+       (z (create-default n :x 142s0 :y 132s0 :sxx 110s0 :sxy 10s0))
+       (za (v+ z
+	       (create-default n :x 142s0 :y 102s0 :sxx 80s0 :sxy 10s0)))
+       (noised (noise (copy-array z)))
+       (fit (multiple-value-call #'create n n (do-fit z)))
+       (fitn (multiple-value-call #'create n n (do-fit noised)))
+       (fiti (multiple-value-call #'create-robust n n 
+				  (multiple-value-call #'estimate-gauss-robust
+				    z 
+				    (calc-pixel-position n)
+				    z 140s0 112s0 100s0 .1s0 100s0
+				    (estimate-amplitude z)))))
+  (write-pgm "/dev/shm/00data.pgm" (scale z :s 200))
+  (write-pgm "/dev/shm/10data-noise.pgm" (scale noised :s 200))
+  (write-pgm "/dev/shm/01fit-nonoise.pgm"
+	     (scale fit :s 200))
+  (write-pgm "/dev/shm/11fit-noise.pgm"
+	     (scale fitn :s 200))
+  (write-pgm "/dev/shm/20fit-robust.pgm"
+ 	     (scale fitn :s 200))
+  (write-pgm "/dev/shm/30fit-two.pgm"
+	     (scale fiti  :s 200))
+  (list (rel-error z fit) (multiple-value-list (do-fit z))
+	(rel-error z fitn) (multiple-value-list (do-fit noised))
+	(rel-error z fiti) #+nil (multiple-value-list
+			    (let ((amp (estimate-amplitude noised)))
+			      (multiple-value-bind (px py) (calc-pixel-position n)
+				(multiple-value-call #'estimate-gauss-robust noised px py 
+						     fit (do-fit z) amp))))))
