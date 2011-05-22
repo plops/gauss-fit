@@ -455,7 +455,7 @@ processing time."
 
 (defun w1 (x)
   (declare (type num x))
-  (let ((a 4s0))
+  (let ((a 14s0))
     (if (<= (abs x) a)
 	(expt (- 1 (expt (/ x a) 2)) 2)
 	0s0)))
@@ -537,11 +537,11 @@ processing time."
 			   (dotimes (j h)
 			    (dotimes (i w)
 			      (when (= 1 (aref ellipse j i)) 
-				(setf (aref q k) (aref residual-abs j i))
+				(setf (aref q k) (aref residual j i))
 				(incf k))))
 			   q))
 	  (sigma (/ (median-absolute-deviation inside-region) .6745)
-	   #+nil (let ((m (median inside-region))) 
+	   #+nil (let ((m (median inside-region))) ;; replace residual with residual-abs
 	       (/ m .6745)))
 	  (weight (let* ((q (make-array dims :element-type 'num))
 			 (q1 (sb-ext:array-storage-vector q))
@@ -576,7 +576,7 @@ processing time."
 		   (incf sum (* (aref z1 i) (expt (* (aref weight1 i) 
 						     (- (aref px1 i) mu-x)) 2))))
 		 (/ sum total)))
-	  (syy sxx #+nil (let ((sum 0s0))
+	  (syy (let ((sum 0s0))
 		 (dotimes (i n)
 		   (incf sum (* (aref z1 i) (expt (* (aref weight1 i) 
 						     (- (aref py1 i) mu-y)) 2))))
@@ -653,13 +653,33 @@ processing time."
 	     (scale a
 		    :s (/ 255s0 (reduce #'max (sb-ext:array-storage-vector a))))))
 
+(defun gnuplot (&rest rest)
+  (when (listp rest)
+   (with-open-file (s "/dev/shm/o.dat" :direction :output
+		      :if-exists :supersede
+		      :if-does-not-exist :create)
+     (dotimes (i (length (car rest)))
+       (format s "~a ~{~a ~}~%" i (loop for e in rest collect (aref e i)))))
+   (with-open-file (s "/dev/shm/o.gp" :direction :output
+		      :if-exists :supersede
+		      :if-does-not-exist :create)
+     (format s "plot ~:{\"/dev/shm/o.dat\" u 1:~A w lp~a ~}~% pause -1"
+	     (loop for i below (length rest) collect
+		  (list (+ 2 i) (if (= i (1- (length rest)))  #\; #\,)))))))
+
+(defun horline (a)
+  (destructuring-bind (h w) (array-dimensions a)
+   (let ((r (make-array w :element-type 'num)))
+     (dotimes (i w)
+       (setf (aref r i) (aref a (floor h 2) i)))
+     r)))
+
 #+nil
 (let* ((w 64)
        (h 64)
-       (x 32s0) (y 32s0) (sxx 32s0) (sxy 0s0) (syy sxx) (amp 1s0)
+       (x 20s0) (y 32s0) (sxx 6s0) (sxy 0s0) (syy sxx) (amp 1s0)
        (z (create-default w :h h :x x :y y :sxx sxx :sxy sxy))
-       (a (create-robust w h 8s0 y sxx 0s0 syy .02s0))
-       (za z #+nil(v+ z a))
+       (za (v+ z (create-robust w h (+ x 8s0) y sxx 0s0 syy .2s0)))
        (fit ()))
   (write-pgm "/dev/shm/00z.pgm" (scale z :s 200))
   (write-pgm "/dev/shm/01za.pgm" (scale za :s 180))
@@ -667,7 +687,8 @@ processing time."
     (multiple-value-bind (x y sxx sxy syy) (estimate-gauss za px py)
       (let ((amp (estimate-amplitude za)))
 	(dotimes (k 12)
-	  (setf fit (create-robust w h x y sxx sxy syy amp))
+	  (setf fit (multiple-value-call #'create-robust w h (do-fit za) (estimate-amplitude za))
+		#+nil (create-robust w h x y sxx sxy syy amp))
 	  
 	  (multiple-value-setq (x y sxx sxy syy amp)
 	    (multiple-value-call #'estimate-gauss-robust
@@ -683,7 +704,17 @@ processing time."
 				*weight*)
 	  (write-pgm (format nil "/dev/shm/04fit-~3,'0d.pgm" k)
 				(scale fit :s 200))
-	  (format t "~a~%" (list k (rel-error za fit) x y sxx amp)))))))
+	  (gnuplot (horline fit) (horline za))
+	  (format t "~a~%" (list k (rel-error za fit) x y sxx syy amp)))))))
+#+nil
+(let* ((w 64)
+       (h 64)
+       (x 20s0) (y 32s0) (sxx 6s0) (sxy 0s0) (syy sxx) (amp 1s0)
+       (z (v+
+	   (create-robust w h (+ x 8) y sxx 0s0 syy .2s0)
+	   (create-default w :h h :x x :y y :sxx sxx :sxy sxy)))
+       (fit (multiple-value-call #'create-robust w h (do-fit z) (estimate-amplitude z))))
+  (gnuplot (horline fit) (horline z)))
 
 #+nil
 (let* ((n 200)
