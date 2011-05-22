@@ -455,7 +455,7 @@ processing time."
 
 (defun w1 (x)
   (declare (type num x))
-  (let ((a 14s0))
+  (let ((a 4s0))
     (if (<= (abs x) a)
 	(expt (- 1 (expt (/ x a) 2)) 2)
 	0s0)))
@@ -508,7 +508,8 @@ processing time."
     (median abd)))
 
 (defun estimate-gauss-robust (z px py old-fit 
-			      old-mu-x old-mu-y old-sxx old-sxy old-syy old-amp)
+			      old-mu-x old-mu-y 
+			      old-sxx old-sxy old-syy old-amp)
   (declare (type (simple-array num 2) z px py old-fit)
 	   (type num old-mu-x old-mu-y old-sxx old-sxy old-syy old-amp))
   (destructuring-bind (h w) (array-dimensions z)
@@ -540,16 +541,16 @@ processing time."
 				(setf (aref q k) (aref residual j i))
 				(incf k))))
 			   q))
-	  (sigma (/ (median-absolute-deviation inside-region) .6745)
-	   #+nil (let ((m (median inside-region))) ;; replace residual with residual-abs
+	  (sigma (/ (median-absolute-deviation inside-region) 
+		.6745)
+	    #+nil (let ((m (median inside-region))) ;; replace residual with residual-abs
 	       (/ m .6745)))
-	  (weight (let* ((q (make-array dims :element-type 'num))
-			 (q1 (sb-ext:array-storage-vector q))
-			 (r1 (sb-ext:array-storage-vector residual)))
+	  (weight (let* ((q (make-array dims :element-type 'num)))
 		    (when (<= sigma 0s0)
 		      (error "sigma not positive ~A" sigma))
-		    (dotimes (i (length q1))
-		      (setf (aref q1 i) (w1 (/ (aref r1 i) sigma))))
+		    (dotimes (j h)
+		      (dotimes (i w)
+			(setf (aref q j i) (w1 (/ (aref residual j i) sigma)))))
 		    q))
 	  (weight1 (sb-ext:array-storage-vector weight))
 	  (total (let ((sum 0s0))
@@ -581,7 +582,7 @@ processing time."
 		   (incf sum (* (aref z1 i) (expt (* (aref weight1 i) 
 						     (- (aref py1 i) mu-y)) 2))))
 		 (/ sum total)))
-	  (sxy 0s0 #+nil (let ((sum 0s0))
+	  (sxy (let ((sum 0s0))
 		 (dotimes (i n)
 		   (incf sum (* (aref z1 i) (* (- (aref px1 i) mu-x) 
 					       (- (aref py1 i) mu-y)
@@ -598,6 +599,7 @@ processing time."
      (defparameter *residual* residual)
      (defparameter *ellipse* ellipse)
      (defparameter *weight* weight)
+     (defparameter *sigma* sigma)
      (values mu-x mu-y sxx sxy syy a))))
 
 (defun create-robust (w h x y sxx sxy syy a &key (position :pixel))
@@ -673,7 +675,7 @@ processing time."
    (with-open-file (s "/dev/shm/o.gp" :direction :output
 		      :if-exists :supersede
 		      :if-does-not-exist :create)
-     (format s "plot ~:{\"/dev/shm/o.dat\" u 1:~A w lp title ~s~a ~}~% pause -1"
+     (format s "plot ~:{\"/dev/shm/o.dat\" u 1:~A w l title ~s~a ~}~% pause -1"
 	     (loop for i below (length rest) collect
 		  (let ((e (elt rest i)))
 		    (if (listp e)
@@ -690,7 +692,7 @@ processing time."
   (destructuring-bind (h w) (array-dimensions a)
    (let ((r (make-array w :element-type 'num)))
      (dotimes (i w)
-       (setf (aref r i) (aref a (floor h 2) i)))
+       (setf (aref r i) (* 1s0 (aref a (floor h 2) i))))
      r)))
 
 #+nil
@@ -698,14 +700,14 @@ processing time."
        (h 64)
        (x 20s0) (y 32s0) (sxx 6s0) (sxy 0s0) (syy sxx) (amp 1s0)
        (z (create-default w :h h :x x :y y :sxx sxx :sxy sxy))
-       (za (v+ z (create-robust w h (+ x 18s0) y sxx 0s0 syy .02s0)))
+       (za (v+ z (create-robust w h (+ x 32s0) y sxx 0s0 syy .25s0)))
        (fit ()))
   (write-pgm "/dev/shm/00z.pgm" (scale z :s 200))
   (write-pgm "/dev/shm/01za.pgm" (scale za :s 180))
   (multiple-value-bind (px py) (calc-pixel-position w :h h)
     (multiple-value-bind (x y sxx sxy syy) (estimate-gauss za px py)
       (let ((amp (estimate-amplitude za)))
-	(dotimes (k 1)
+	(dotimes (k 4)
 	  (setf fit 
 		#-nil (multiple-value-call #'create-robust w h (do-fit za) (estimate-amplitude za))
 		#+nil (create-robust w h x y sxx sxy syy amp))
@@ -724,10 +726,13 @@ processing time."
 				*weight*)
 	  (write-pgm (format nil "/dev/shm/04fit-~3,'0d.pgm" k)
 				(scale fit :s 200))
-	  (gnuplot `("fit" ,(horline fit)) 
-		   `("za" ,(horline za))
+	  (gnuplot `("za" ,(horline za))
+		   `("fit" ,(horline fit)) 
 		   `("residual" ,(horline *residual*))
-		   `("weight" ,(horline *weight*)))
+		   `("ellipse" ,(horline *ellipse*))
+		   `("weight" ,(horline *weight*))
+		   `("sigma" ,(make-array w :element-type 'num
+				     :initial-contents (loop for i below w collect *sigma*))))
 	  (format t "~a~%" (list k (rel-error za fit) x y sxx syy amp)))))))
 #+nil
 (let* ((w 64)
